@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -1305,28 +1306,35 @@ func (r *deviceResource) Read(
 		state.ForgetOnDestroy = forgetOnDestroy
 	}
 
-	// Reconcile port_override: the API returns all ports with all fields, but
-	// the user only configures a subset. Rebuild state from the API response
-	// using only the ports/fields the user configured, so drift is detectable.
-	// If the user configured no port_overrides, keep state null so Terraform
-	// doesn't plan to remove ports it doesn't manage.
-	if priorPortOverride.IsNull() || priorPortOverride.IsUnknown() {
-		state.PortOverride = priorPortOverride
-	} else {
-		reconciled, reconcileDiags := r.reconcilePortOverrides(
-			ctx,
-			priorPortOverride,
-			device.PortOverrides,
-		)
-		resp.Diagnostics.Append(reconcileDiags...)
-		if !resp.Diagnostics.HasError() {
-			state.PortOverride = reconciled
-		}
+	state.PortOverride, diags = r.portOverrideState(
+		ctx,
+		priorPortOverride,
+		device.PortOverrides,
+	)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
 	resp.Diagnostics.Append(resp.Identity.SetAttribute(ctx, path.Root("id"), state.ID)...)
 	diags = resp.State.Set(ctx, state)
 	resp.Diagnostics.Append(diags...)
+}
+
+func (r *deviceResource) portOverrideState(
+	ctx context.Context,
+	prior types.Set,
+	apiOverrides []unifi.DevicePortOverrides,
+) (types.Set, diag.Diagnostics) {
+	if prior.IsNull() || prior.IsUnknown() {
+		if os.Getenv("UNIFI_IMPORT_PORT_OVERRIDES") != "true" || len(apiOverrides) == 0 {
+			return prior, nil
+		}
+
+		return r.portOverridesToFramework(ctx, apiOverrides)
+	}
+
+	return r.reconcilePortOverrides(ctx, prior, apiOverrides)
 }
 
 func (r *deviceResource) Update(
@@ -2330,7 +2338,7 @@ func (r *deviceResource) portOverridesToFramework(
 		}
 
 		if po.OpMode == "" {
-			model.OpMode = types.StringNull()
+			model.OpMode = types.StringValue("switch")
 		} else {
 			model.OpMode = types.StringValue(po.OpMode)
 		}

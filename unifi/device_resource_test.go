@@ -868,6 +868,43 @@ func Test_deviceResource_reconcilePortOverrides(t *testing.T) {
 	}
 }
 
+func TestDeviceResourcePortOverrideStateImport(t *testing.T) {
+	r := &deviceResource{}
+	prior := types.SetNull(types.ObjectType{AttrTypes: portOverrideAttrTypes()})
+	overrides := []unifi.DevicePortOverrides{{
+		PortIDX: ptrInt64(2),
+		Name:    "Camera",
+	}}
+
+	t.Run("disabled", func(t *testing.T) {
+		t.Setenv("UNIFI_IMPORT_PORT_OVERRIDES", "")
+		got, diags := r.portOverrideState(context.Background(), prior, overrides)
+		if diags.HasError() {
+			t.Fatalf("portOverrideState returned diagnostics: %v", diags)
+		}
+		if !got.IsNull() {
+			t.Fatalf("expected null state without opt-in, got %v", got)
+		}
+	})
+
+	t.Run("enabled", func(t *testing.T) {
+		t.Setenv("UNIFI_IMPORT_PORT_OVERRIDES", "true")
+		got, diags := r.portOverrideState(context.Background(), prior, overrides)
+		if diags.HasError() {
+			t.Fatalf("portOverrideState returned diagnostics: %v", diags)
+		}
+		if got.IsNull() || len(got.Elements()) != 1 {
+			t.Fatalf("expected one imported port override, got %v", got)
+		}
+
+		port := got.Elements()[0].(types.Object)
+		opMode := port.Attributes()["op_mode"].(types.String)
+		if opMode.ValueString() != "switch" {
+			t.Fatalf("expected default op_mode switch, got %v", opMode)
+		}
+	})
+}
+
 func Test_deviceResource_portOverridesToFramework(t *testing.T) {
 	type args struct {
 		ctx context.Context
